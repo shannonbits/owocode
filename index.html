@@ -349,27 +349,61 @@
                     return;
                 }
 
+                fileTree.innerHTML = '<div style="padding: 20px; text-align: center;"><i class="fas fa-spinner fa-spin"></i> Loading JAR file...</div>';
+                fileContent.innerHTML = '<div style="padding: 20px; text-align: center;"><i class="fas fa-spinner fa-spin"></i> Preparing file...</div>';
+
                 const reader = new FileReader();
-                reader.onload = function(e) {
-                    try {
-                        fileTree.innerHTML = '<div style="padding: 20px; text-align: center;"><i class="fas fa-spinner fa-spin"></i> Loading JAR file...</div>';
-                        
-                        JSZip.loadAsync(e.target.result).then(function(zip) {
-                            currentJar = zip;
-                            allFiles = [];
-                            searchInput.disabled = false;
-                            searchBtn.disabled = false;
-                            displayFileTree(zip);
-                        }).catch(error => {
-                            showError('Failed to load JAR file: ' + error.message);
-                        });
-                    } catch (error) {
-                        showError('Error reading JAR file: ' + error.message);
+                
+                reader.onloadstart = function() {
+                    console.log('Starting to read file');
+                };
+                
+                reader.onprogress = function(evt) {
+                    if (evt.lengthComputable) {
+                        const percentLoaded = Math.round((evt.loaded / evt.total) * 100);
+                        fileTree.innerHTML = `<div style="padding: 20px; text-align: center;">
+                            <i class="fas fa-spinner fa-spin"></i><br>
+                            Loading JAR file... ${percentLoaded}%
+                        </div>`;
                     }
                 };
-                reader.onerror = function() {
-                    showError('Error reading file');
+
+                reader.onload = function(e) {
+                    try {
+                        JSZip.loadAsync(e.target.result)
+                            .then(function(zip) {
+                                currentJar = zip;
+                                allFiles = [];
+                                searchInput.disabled = false;
+                                searchBtn.disabled = false;
+                                displayFileTree(zip);
+                            })
+                            .catch(error => {
+                                showError('Failed to process JAR file: ' + error.message);
+                                console.error('JSZip error:', error);
+                            });
+                    } catch (error) {
+                        showError('Error reading JAR file: ' + error.message);
+                        console.error('Error:', error);
+                    }
                 };
+                
+                reader.onerror = function() {
+                    showError('Error reading file - it may be corrupted or too large');
+                    console.error('FileReader error:', reader.error);
+                };
+                
+                reader.onabort = function() {
+                    showError('File reading was aborted');
+                };
+                
+                if (file.size > 50 * 1024 * 1024) { // 50MB limit
+                    if (!confirm('This file is large (' + formatFileSize(file.size) + '). Loading may take a while. Continue?')) {
+                        return;
+                    }
+                }
+                
+                console.log('Reading file:', file.name, 'Size:', file.size);
                 reader.readAsArrayBuffer(file);
             }
 
@@ -528,7 +562,7 @@
                     !file.isDirectory && 
                     (file.path.toLowerCase().includes(query) || 
                      (file.content && file.content.toLowerCase().includes(query)))
-                    .slice(0, 100); // Limit to 100 results
+                ).slice(0, 100); // Limit to 100 results
                 
                 if (results.length === 0) {
                     fileTree.innerHTML = '<div class="empty-state"><i class="fas fa-search"></i> No files found matching your search</div>';
@@ -548,6 +582,7 @@
             }
 
             function formatFileSize(bytes) {
+                if (typeof bytes !== 'number') return 'N/A';
                 if (bytes < 1024) return bytes + ' B';
                 if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
                 return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
