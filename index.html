@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OwOcode</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="script.js" defer></script>
+</head>
+<body>
+    <div class="container">
+        <h1>OwOcode</h1>
+        <div class="upload-area" id="dropZone">
+            <p>Drag & drop a JAR file here or</p>
+            <input type="file" id="fileInput" accept=".jar,.zip">
+            <label for="fileInput">Choose a file</label>
+        </div>
+        <div class="results">
+            <div class="file-tree" id="fileTree"></div>
+            <div class="file-content" id="fileContent">
+                <p>Select a file from the tree to view its contents</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
