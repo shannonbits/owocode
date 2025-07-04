@@ -176,6 +176,21 @@
             margin-left: 8px;
         }
 
+        .progress-bar {
+            height: 4px;
+            background-color: var(--border);
+            margin-top: 10px;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress {
+            height: 100%;
+            background-color: var(--primary);
+            width: 0%;
+            transition: width 0.3s;
+        }
+
         @media (max-width: 768px) {
             .results-container {
                 flex-direction: column;
@@ -191,14 +206,18 @@
 <body>
     <div class="container">
         <header>
-            <h1><i class="fas fa-file-code"></i> OwOcode Java Decompiler</h1>
+            <h1><i class="fas fa-file-code"></i> Web Java Decompiler</h1>
+            <p>Fully functional Java decompiler that works in your browser</p>
         </header>
 
         <div class="upload-area" id="dropZone">
             <p><i class="fas fa-cloud-upload-alt" style="font-size: 48px; color: var(--primary);"></i></p>
-            <p>Drag & drop a JAR file here or</p>
-            <input type="file" id="fileInput" class="file-input" accept=".jar,.zip">
-            <label for="fileInput" class="upload-btn"><i class="fas fa-folder-open"></i> Choose JAR File</label>
+            <p>Drag & drop a JAR or .class file here or</p>
+            <input type="file" id="fileInput" class="file-input" accept=".jar,.zip,.class">
+            <label for="fileInput" class="upload-btn"><i class="fas fa-folder-open"></i> Choose File</label>
+            <div class="progress-bar">
+                <div class="progress" id="progressBar"></div>
+            </div>
         </div>
 
         <div class="results-container">
@@ -209,8 +228,8 @@
                 <div class="file-tree" id="fileTree">
                     <div class="empty-state">
                         <i class="fas fa-box-open" style="font-size: 48px; margin-bottom: 15px;"></i>
-                        <p>No JAR file loaded</p>
-                        <p>Upload a JAR file to explore its contents</p>
+                        <p>No file loaded</p>
+                        <p>Upload a JAR or .class file to explore</p>
                     </div>
                 </div>
             </div>
@@ -225,16 +244,21 @@
         </div>
     </div>
 
+    <!-- Load CFR decompiler (WebAssembly version) -->
+    <script src="https://cdn.jsdelivr.net/npm/cfr-wasm@0.1.0/dist/cfr.js"></script>
+    
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const dropZone = document.getElementById('dropZone');
             const fileInput = document.getElementById('fileInput');
             const fileTree = document.getElementById('fileTree');
             const currentFileSpan = document.getElementById('currentFile');
+            const progressBar = document.getElementById('progressBar');
             
             let currentJar = null;
             let allFiles = [];
             let selectedFile = null;
+            let cfrDecompiler = null;
 
             // Setup ACE Editor
             const editor = ace.edit("editor");
@@ -244,8 +268,24 @@
             editor.setOptions({
                 fontSize: "14px",
                 tabSize: 4,
-                useSoftTabs: true
+                useSoftTabs: true,
+                wrap: true
             });
+
+            // Initialize CFR decompiler
+            async function initDecompiler() {
+                try {
+                    console.log("Loading CFR decompiler...");
+                    cfrDecompiler = await CFR();
+                    console.log("CFR decompiler loaded successfully");
+                } catch (error) {
+                    console.error("Failed to load CFR decompiler:", error);
+                    showError("Failed to load Java decompiler. Please refresh the page.");
+                }
+            }
+
+            // Start loading the decompiler immediately
+            initDecompiler();
 
             // Handle drag and drop
             dropZone.addEventListener('dragover', (e) => {
@@ -274,29 +314,43 @@
             });
 
             function handleFile(file) {
-                if (!file.name.match(/\.(jar|zip)$/i)) {
-                    alert('Please upload a JAR or ZIP file');
+                if (!file.name.match(/\.(jar|zip|class)$/i)) {
+                    alert('Please upload a JAR, ZIP, or .class file');
                     return;
                 }
 
-                fileTree.innerHTML = '<div style="padding: 20px; text-align: center;"><i class="fas fa-spinner fa-spin"></i> Loading JAR file...</div>';
-                editor.setValue("// Decompiling... Please wait", -1);
+                fileTree.innerHTML = '<div style="padding: 20px; text-align: center;"><i class="fas fa-spinner fa-spin"></i> Loading file...</div>';
+                editor.setValue("// Loading file... Please wait", -1);
+                updateProgress(0);
 
                 const reader = new FileReader();
                 
                 reader.onload = function(e) {
                     try {
-                        JSZip.loadAsync(e.target.result)
+                        if (file.name.endsWith('.class')) {
+                            // Single class file
+                            handleClassFile(e.target.result, file.name);
+                        } else {
+                            // JAR/ZIP file
+                            JSZip.loadAsync(e.target.result, { 
+                                onUpdate: (metadata) => {
+                                    if (metadata.percent) {
+                                        updateProgress(metadata.percent);
+                                    }
+                                }
+                            })
                             .then(function(zip) {
                                 currentJar = zip;
                                 allFiles = [];
                                 displayFileTree(zip);
+                                updateProgress(100);
                             })
                             .catch(error => {
                                 showError('Failed to process JAR file: ' + error.message);
                             });
+                        }
                     } catch (error) {
-                        showError('Error reading JAR file: ' + error.message);
+                        showError('Error reading file: ' + error.message);
                     }
                 };
                 
@@ -311,6 +365,48 @@
                 }
                 
                 reader.readAsArrayBuffer(file);
+            }
+
+            async function handleClassFile(buffer, filename) {
+                fileTree.innerHTML = '';
+                allFiles = [];
+                
+                const item = {
+                    path: filename,
+                    name: filename,
+                    isDirectory: false,
+                    size: buffer.byteLength,
+                    content: new Uint8Array(buffer)
+                };
+                
+                allFiles.push(item);
+
+                const div = document.createElement('div');
+                div.className = 'tree-item selected';
+                div.dataset.path = filename;
+                
+                div.innerHTML = `
+                    <i class="fas fa-java"></i>
+                    <span>${item.name}</span>
+                    <span class="file-size">(${formatFileSize(item.size)})</span>
+                `;
+                
+                div.addEventListener('click', () => {
+                    document.querySelectorAll('.tree-item').forEach(el => {
+                        el.classList.remove('selected');
+                    });
+                    
+                    div.classList.add('selected');
+                    selectedFile = item;
+                    displayFileContent(item);
+                });
+                
+                fileTree.appendChild(div);
+                
+                // Display the content immediately
+                selectedFile = item;
+                await displayFileContent(item);
+                updateProgress(100);
             }
 
             function displayFileTree(zip) {
@@ -359,7 +455,7 @@
                 });
 
                 if (fileTree.children.length === 0) {
-                    fileTree.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i> JAR file is empty</div>';
+                    fileTree.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i> File is empty</div>';
                 }
             }
 
@@ -369,9 +465,18 @@
                 
                 try {
                     if (item.path.endsWith('.class')) {
-                        // Use the JVM bytecode decompiler
-                        const content = await item.file.async('uint8array');
-                        const decompiledCode = decompileClassFile(content);
+                        // Use CFR decompiler for .class files
+                        const content = item.content || await item.file.async('uint8array');
+                        
+                        if (!cfrDecompiler) {
+                            editor.setValue("// Decompiler is still loading...\n// Please wait and try again", -1);
+                            return;
+                        }
+                        
+                        editor.setValue("// Decompiling... This may take a few seconds", -1);
+                        
+                        // Decompile with CFR
+                        const decompiledCode = await decompileWithCFR(content);
                         editor.session.setMode("ace/mode/java");
                         editor.setValue(decompiledCode, -1);
                     }
@@ -390,47 +495,36 @@
                     }
                 } catch (error) {
                     editor.setValue(`// Error loading file:\n// ${error.message}`, -1);
+                    console.error("Error loading file:", error);
                 }
             }
 
-            // Simple class file decompiler (basic implementation)
-            function decompileClassFile(buffer) {
-                // This is a simplified version - in reality you'd use a proper decompiler
-                // For a real implementation, you'd integrate CFR, Procyon, or Fernflower
-                
-                let result = "// Decompiled Java class\n";
-                result += "// Note: This is a basic preview - use a full decompiler for better results\n\n";
-                
+            async function decompileWithCFR(classData) {
                 try {
-                    // Extract class name from constant pool (simplified)
-                    const classReader = new DataView(buffer.buffer);
-                    const constantPoolCount = classReader.getUint16(8);
+                    // Convert class data to base64 for CFR
+                    const base64Class = btoa(String.fromCharCode.apply(null, classData));
                     
-                    // Very basic attempt to find the class name
-                    for (let i = 0; i < constantPoolCount; i++) {
-                        const tag = classReader.getUint8(10 + i);
-                        if (tag === 7) { // Class reference
-                            const nameIndex = classReader.getUint16(10 + i + 1);
-                            const length = classReader.getUint16(10 + nameIndex);
-                            let className = '';
-                            for (let j = 0; j < length; j++) {
-                                className += String.fromCharCode(classReader.getUint8(10 + nameIndex + 2 + j));
-                            }
-                            result += `public class ${className.replace(/\//g, '.')} {\n`;
-                            break;
+                    // Decompile with CFR
+                    const result = await cfrDecompiler.decompile({
+                        file: base64Class,
+                        outputType: 'string',
+                        options: {
+                            showVersion: false,
+                            decodeFinally: true,
+                            removeInnerClassSynthetics: true,
+                            removeBadGenerics: true,
+                            sugarAssert: true,
+                            sugarBoxing: true,
+                            sugarEnum: true,
+                            sugarForEach: true,
+                            sugarStringSwitch: true
                         }
-                    }
+                    });
                     
-                    result += "    // Method implementations would appear here\n";
-                    result += "    // In a real decompiler, you'd see actual method code\n";
-                    result += "}\n\n";
-                    result += "// To get proper decompilation:\n";
-                    result += "// 1. Download JD-GUI (https://java-decompiler.github.io)\n";
-                    result += "// 2. Use CFR decompiler (https://www.benf.org/other/cfr)\n";
-                    
-                    return result;
-                } catch (e) {
-                    return `// Error decompiling class:\n// ${e.message}\n\n// Try using a proper Java decompiler tool`;
+                    return result.decompiled;
+                } catch (error) {
+                    console.error("Decompilation error:", error);
+                    return `// Error during decompilation:\n// ${error.message}\n\n// Try another decompiler if this fails`;
                 }
             }
 
@@ -441,6 +535,10 @@
                 return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
             }
 
+            function updateProgress(percent) {
+                progressBar.style.width = percent + '%';
+            }
+
             function showError(message) {
                 fileTree.innerHTML = `
                     <div class="empty-state">
@@ -449,7 +547,8 @@
                         <p>${message}</p>
                     </div>
                 `;
-                editor.setValue(`// Error: ${message}\n\n// Try another JAR file or check browser console`, -1);
+                editor.setValue(`// Error: ${message}\n\n// Try another file or check browser console`, -1);
+                updateProgress(0);
             }
         });
     </script>
